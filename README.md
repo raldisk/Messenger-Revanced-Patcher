@@ -1,6 +1,6 @@
 # Messenger ReVanced Patcher
 
-A single Python script that automatically downloads dependencies and applies ReVanced patches to Facebook Messenger (com.facebook.orca) on Windows.
+A single Python script that automatically downloads dependencies and applies ReVanced patches to Facebook Messenger (com.facebook.orca) on Windows, Linux, and macOS.
 
 ---
 
@@ -24,8 +24,6 @@ A single Python script that automatically downloads dependencies and applies ReV
 | Hide Facebook button | Hides the Facebook shortcut button |
 | Disable Pairip license check | Bypasses Pairip license verification |
 | Disable Play Integrity | Bypasses Play Integrity API checks |
-| Disable Sentry telemetry | Disables Sentry crash/telemetry reporting |
-| Export internal data documents provider | Enables internal data export provider |
 | Prevent screenshot detection | Disables screenshot detection flag |
 
 ---
