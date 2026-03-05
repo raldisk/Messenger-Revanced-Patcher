@@ -1,14 +1,16 @@
 # Messenger ReVanced Patcher
 
-A Python script that automates applying ReVanced patches to Facebook Messenger (com.facebook.orca) on Windows.
+A single Python script that automatically downloads dependencies and applies ReVanced patches to Facebook Messenger (com.facebook.orca) on Windows.
 
 ---
 
 ## What It Does
 
+- Checks for required tools — downloads any that are missing automatically
+- Prefers pre-release versions of ReVanced CLI and Patches, falls back to stable
 - Applies selected ReVanced patches to the Messenger APK
-- Handles Messenger's broken resource table (`APKTOOL_DUMMYVAL` / `.2` directory issues) automatically via a background watcher
-- Outputs a patched APK ready for manifest fixing and signing
+- Handles Messenger's broken resource table (`APKTOOL_DUMMYVAL` / `.2` directory issues) via a background watcher thread
+- Outputs a patched APK ready for the MT Manager manifest fix
 
 ---
 
@@ -28,36 +30,53 @@ A Python script that automates applying ReVanced patches to Facebook Messenger (
 
 ---
 
-## Dependencies
+## Requirements
 
-Place all files in the **same folder** as the script before running.
+- Python 3.x
+- Java JDK 11+ — https://adoptium.net
+- Internet connection (first run only, for dependency downloads)
 
-### 1. Java (JDK 11+)
-Required to run all `.jar` tools.
-- https://adoptium.net
+---
 
-### 2. ReVanced CLI
-- Filename: `revanced-cli-6.0.0-dev.2-all.jar`
-- Download: https://github.com/ReVanced/revanced-cli/releases
+## Usage
 
-### 3. ReVanced Patches
-- Filename: `patches-6.0.0-dev.14.rvp`
-- Download: https://github.com/ReVanced/revanced-patches/releases
+### Step 1 — Add Base APK (manual)
 
-### 4. aapt2.exe
-Required for resource compilation. Extract `aapt2.exe` from the JAR using 7-Zip.
-- Download from Google Maven:
-  https://maven.google.com/web/index.html#com.android.tools.build:aapt2
-- Find the latest version, download the `-windows.jar`, extract `aapt2.exe`
+APKMirror blocks automated downloads, so this must be done manually.
 
-### 5. Base APK
-- Package: `com.facebook.orca`
-- Version tested: `550.0.0.45.63`
-- Download from APKMirror: https://www.apkmirror.com/apk/facebook-2/messenger/
-- **Important:** Download the **single APK (nodpi)** variant, NOT the bundle
+1. Go to: https://www.apkmirror.com/apk/facebook-2/messenger/
+2. Download the **nodpi single APK** variant (not bundle)
+3. Rename it to match `APK_IN` in `revanced_only.py`
+4. Place it in the same folder as the script
 
-### 6. Keystore
-See [Creating a Keystore](#creating-a-keystore) section below.
+### Step 2 — Run
+
+```powershell
+python revanced_only.py
+```
+
+On first run, the script will automatically download:
+- ReVanced CLI (latest pre-release or stable)
+- ReVanced Patches (latest pre-release or stable)
+- Apktool
+- uber-apk-signer
+- aapt2.exe (extracted from Google Maven JAR)
+
+On subsequent runs, existing files are detected and skipped.
+
+Output: `final-messenger-apk.apk`
+
+---
+
+## Dependencies (Auto-downloaded)
+
+| Tool | Source |
+|---|---|
+| ReVanced CLI | https://github.com/ReVanced/revanced-cli/releases |
+| ReVanced Patches | https://github.com/ReVanced/revanced-patches/releases |
+| Apktool | https://github.com/iBotPeaches/Apktool/releases |
+| uber-apk-signer | https://github.com/patrickfav/uber-apk-signer/releases |
+| aapt2.exe | https://maven.google.com/web/index.html#com.android.tools.build:aapt2 |
 
 ---
 
@@ -66,42 +85,31 @@ See [Creating a Keystore](#creating-a-keystore) section below.
 ```
 messenger-rebuild/
 ├── revanced_only.py
-├── revanced-cli-6.0.0-dev.2-all.jar
-├── patches-6.0.0-dev.14.rvp
-├── aapt2.exe
-├── Manager.keystore
-└── com.facebook.orca_550.0.0.45.63.com.apk
+├── Manager.keystore              ← your signing keystore
+└── com.facebook.orca_*.apk      ← base APK from APKMirror
 ```
 
----
-
-## Usage
-
-```powershell
-python revanced_only.py
-```
-
-Output: `final-messenger-apk.apk`
+After first run, downloaded tools will appear alongside the script.
 
 ---
 
 ## Creating a Keystore
 
-You can generate a keystore using ReVanced CLI directly:
+Generate a signing keystore using ReVanced CLI:
 
 ```bash
-java -jar revanced-cli-6.0.0-dev.2-all.jar utility keystore --keystore Manager.keystore --keystore-entry-alias "ReVanced Key" --keystore-password ReVanced --keystore-entry-password ReVanced
+java -jar revanced-cli-*.jar utility keystore --keystore Manager.keystore --keystore-entry-alias "ReVanced Key" --keystore-password ReVanced --keystore-entry-password ReVanced
 ```
 
-This creates `Manager.keystore` in the current directory with the default ReVanced credentials. Keep this file safe — you need the **same keystore** every time you repatch, otherwise Android will reject the update due to signature mismatch.
+Keep `Manager.keystore` safe — you need the **same keystore** every time you repatch. Android will reject updates signed with a different key.
 
 ---
 
 ## Post-Patch: Manifest Fix (MT Manager Method)
 
-After the script outputs `final-messenger-apk.apk`, the APK cannot be installed directly due to a permission conflict. Fix it using **MT Manager** on Android:
+After patching, the APK cannot be installed directly due to a permission conflict. Fix it using **MT Manager** on Android:
 
-> This method is recommended over the full apktool decode/rebuild pipeline as it is significantly faster and less resource intensive.
+> This method is recommended over the full apktool decode/rebuild pipeline — it is significantly faster and less resource intensive.
 
 ### Steps
 
@@ -120,21 +128,21 @@ After the script outputs `final-messenger-apk.apk`, the APK cannot be installed 
 
 ### Why This Is Needed
 
-Facebook Messenger declares custom permissions using its own package name (`com.facebook.*`). When a patched APK tries to declare the same permissions as a different signer, Android rejects the install. Renaming the permission strings avoids the conflict.
+Facebook Messenger declares custom permissions using its own package name (`com.facebook.*`). When a patched APK tries to declare the same permissions under a different signer, Android rejects the install. Renaming the permission strings avoids this conflict.
+
+---
+
+## Notes
+
+- Patching does **not** require an internet connection after first setup
+- The background watcher thread continuously removes invalid `.2` resource directories and `APKTOOL_DUMMYVAL` files that cause aapt2 to fail during patching
+- `APKTOOL_DUMMYVAL` files are a known apktool limitation with Messenger's split resource table
 
 ---
 
 ## Credits
 
 - **MT Manager manifest fix method** — originally documented by [@reisxd](https://github.com/ReVanced/revanced-patches/issues/1063#issuecomment-1854976122) in the ReVanced patches issue tracker
-
----
-
-## Notes
-
-- Patching does **not** require an internet connection
-- The watcher thread runs continuously during patching to delete invalid `.2` resource directories that cause aapt2 to fail
-- `APKTOOL_DUMMYVAL` files are a known apktool limitation with Messenger's split resource table
 
 ---
 
