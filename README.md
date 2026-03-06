@@ -148,6 +148,7 @@ Facebook Messenger declares custom permissions using its own package name (`com.
 ## Credits
 
 - **MT Manager manifest fix method** — originally documented by [@reisxd](https://github.com/ReVanced/revanced-patches/issues/1063#issuecomment-1854976122) in the ReVanced patches issue tracker
+- **[@kazimmt](https://github.com/kazimmt)**
 
 ---
 
