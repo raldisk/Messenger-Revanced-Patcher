@@ -1,0 +1,185 @@
+name: Check for Updates
+
+on:
+  schedule:
+    # Runs every 6 hours. Adjust as needed.
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-notify:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ──────────────────────────────────────────────────────────────────────────
+      # 1. Resolve the "latest" ReVanced Patches release.
+      #    Mirrors pick_release() in revanced_only.py:
+      #      → prefer pre-release first, then fall back to latest stable.
+      #    Uses the list endpoint (not /releases/latest) to match the script.
+      # ──────────────────────────────────────────────────────────────────────────
+      - name: Resolve latest ReVanced Patches release
+        id: patches
+        run: |
+          RELEASES=$(curl -fsSL \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/ReVanced/revanced-patches/releases?per_page=10")
+
+          # Prefer pre-release, then fall back to first non-draft stable
+          RELEASE=$(echo "$RELEASES" | jq 'first(.[] | select(.prerelease == true))')
+          if [ -z "$RELEASE" ] || [ "$RELEASE" = "null" ]; then
+            RELEASE=$(echo "$RELEASES" | jq 'first(.[] | select(.draft == false))')
+          fi
+
+          VERSION=$(echo "$RELEASE" | jq -r '.tag_name')
+          CHANGELOG=$(echo "$RELEASE" | jq -r '.body // "No changelog available."')
+          IS_PRE=$(echo "$RELEASE" | jq -r '.prerelease')
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=${IS_PRE}" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "changelog<<PATCHES_EOF"
+            echo "${CHANGELOG}"
+            echo "PATCHES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # ──────────────────────────────────────────────────────────────────────────
+      # 2. Resolve the "latest" ReVanced CLI release using the same logic.
+      #    Asset keyword: "all.jar" — matches find_asset(assets, "all.jar").
+      # ──────────────────────────────────────────────────────────────────────────
+      - name: Resolve latest ReVanced CLI release
+        id: cli
+        run: |
+          RELEASES=$(curl -fsSL \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/ReVanced/revanced-cli/releases?per_page=10")
+
+          RELEASE=$(echo "$RELEASES" | jq 'first(.[] | select(.prerelease == true))')
+          if [ -z "$RELEASE" ] || [ "$RELEASE" = "null" ]; then
+            RELEASE=$(echo "$RELEASES" | jq 'first(.[] | select(.draft == false))')
+          fi
+
+          VERSION=$(echo "$RELEASE" | jq -r '.tag_name')
+          IS_PRE=$(echo "$RELEASE" | jq -r '.prerelease')
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=${IS_PRE}" >> "$GITHUB_OUTPUT"
+
+      # ──────────────────────────────────────────────────────────────────────────
+      # 3. Detect the latest Messenger version from APKMirror (best-effort).
+      #    Failure degrades to "unknown" — it is purely informational in the
+      #    release body and does NOT gate the release creation.
+      # ──────────────────────────────────────────────────────────────────────────
+      - name: Detect latest Messenger version from APKMirror
+        id: messenger
+        run: |
+          VERSION=$(curl -fsSL \
+            -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            -H "Accept: text/html,application/xhtml+xml" \
+            "https://www.apkmirror.com/apk/facebook-2/messenger/" \
+            | grep -oP '(?<=/messenger-)[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(?=-release)' \
+            | sort -V | tail -1 || true)
+
+          if [ -z "$VERSION" ]; then
+            echo "version=unknown" >> "$GITHUB_OUTPUT"
+            echo "::warning::APKMirror scrape returned no version."
+          else
+            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ──────────────────────────────────────────────────────────────────────────
+      # 4. Compare patches version against the last release tag in this repo.
+      #    Tag format: the patches version string itself (e.g. "v4.18.0").
+      #    A missing /releases/latest (HTTP 404) is treated as "no prior release"
+      #    and triggers creation of the first one.
+      # ──────────────────────────────────────────────────────────────────────────
+      - name: Compare against last published release tag
+        id: compare
+        run: |
+          LAST_TAG=$(curl -fsSL \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/latest" \
+            | jq -r '.tag_name // "none"')
+
+          NEW_TAG="${{ steps.patches.outputs.version }}"
+
+          echo "last_tag=${LAST_TAG}" >> "$GITHUB_OUTPUT"
+          echo "new_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
+
+          if [ "$NEW_TAG" != "$LAST_TAG" ]; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            echo "Update detected: patches ${NEW_TAG} (was: ${LAST_TAG})"
+          else
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "Already up-to-date at ${LAST_TAG}. No release created."
+          fi
+
+      # ──────────────────────────────────────────────────────────────────────────
+      # 5. Create a notification-only GitHub Release.
+      #    No APK is attached — this is purely a version-tracker and watch signal.
+      #    Pre-release flag mirrors what pick_release() resolved upstream.
+      # ──────────────────────────────────────────────────────────────────────────
+      - name: Create notification release
+        if: steps.compare.outputs.needed == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.compare.outputs.new_tag }}
+          name: "ReVanced Patches ${{ steps.patches.outputs.version }} · Messenger ${{ steps.messenger.outputs.version }}"
+          prerelease: ${{ steps.patches.outputs.is_prerelease }}
+          body: |
+            ## Update Available
+
+            A new ReVanced Patches version has been released. Repatch Messenger to apply the latest fixes.
+
+            | Component | Version | Type |
+            |-----------|---------|------|
+            | **Messenger (base APK)** | `${{ steps.messenger.outputs.version }}` | — |
+            | **ReVanced Patches** | `${{ steps.patches.outputs.version }}` | ${{ steps.patches.outputs.is_prerelease == 'true' && 'PRE-RELEASE' || 'STABLE' }} |
+            | **ReVanced CLI** | `${{ steps.cli.outputs.version }}` | ${{ steps.cli.outputs.is_prerelease == 'true' && 'PRE-RELEASE' || 'STABLE' }} |
+
+            > ℹ️ Messenger version is scraped from APKMirror and may show `unknown` if the scrape fails. Verify manually at [APKMirror → Messenger](https://www.apkmirror.com/apk/facebook-2/messenger/).
+
+            ---
+
+            ## How to Patch
+
+            1. Download the **nodpi single APK** for Messenger `${{ steps.messenger.outputs.version }}` from [APKMirror → Messenger](https://www.apkmirror.com/apk/facebook-2/messenger/)
+            2. Place the APK alongside `revanced_only.py` — no renaming needed, the script auto-detects the APKMirror filename
+            3. Run:
+               ```
+               python revanced_only.py
+               ```
+               Or to skip patch selection prompts:
+               ```
+               python revanced_only.py -y
+               ```
+
+            ReVanced CLI and Patches are updated automatically on every run. No other manual steps are needed before patching.
+
+            ---
+
+            ## Patches Applied
+
+            | Patch | Description |
+            |-------|-------------|
+            | Hide inbox ads | Removes ads from the inbox |
+            | Hide inbox subtabs | Hides subtabs in the inbox |
+            | Remove Meta AI | Removes Meta AI button |
+            | Hide Facebook button | Hides the Facebook shortcut button |
+            | Disable Pairip license check | Bypasses Pairip license verification |
+            | Disable Play Integrity | Bypasses Play Integrity API checks |
+            | Prevent screenshot detection | Disables screenshot detection flag |
+
+            ---
+
+            ## ReVanced Patches Changelog
+
+            ${{ steps.patches.outputs.changelog }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

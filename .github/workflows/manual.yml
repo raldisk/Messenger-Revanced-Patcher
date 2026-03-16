@@ -1,0 +1,102 @@
+name: Manual Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      patches_version:
+        description: 'ReVanced Patches version tag (e.g. v4.18.0)'
+        required: true
+        type: string
+      cli_version:
+        description: 'ReVanced CLI version tag (e.g. v4.4.0)'
+        required: true
+        type: string
+      messenger_version:
+        description: 'Messenger version string (e.g. 551.0.0.48.62) — shown in release body only'
+        required: false
+        default: 'unknown'
+        type: string
+      is_prerelease:
+        description: 'Mark this release as a pre-release?'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+permissions:
+  contents: write
+
+jobs:
+  manual-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch changelog for specified patches version
+        id: patches
+        run: |
+          RELEASE=$(curl -fsSL \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/ReVanced/revanced-patches/releases/tags/${{ inputs.patches_version }}")
+
+          CHANGELOG=$(echo "$RELEASE" | jq -r '.body // "No changelog available."')
+
+          {
+            echo "changelog<<PATCHES_EOF"
+            echo "${CHANGELOG}"
+            echo "PATCHES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create manual notification release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.patches_version }}
+          name: "ReVanced Patches ${{ inputs.patches_version }} · Messenger ${{ inputs.messenger_version }}"
+          prerelease: ${{ inputs.is_prerelease }}
+          body: |
+            ## Update Available (Manual Release)
+
+            | Component | Version | Type |
+            |-----------|---------|------|
+            | **Messenger (base APK)** | `${{ inputs.messenger_version }}` | — |
+            | **ReVanced Patches** | `${{ inputs.patches_version }}` | ${{ inputs.is_prerelease == 'true' && 'PRE-RELEASE' || 'STABLE' }} |
+            | **ReVanced CLI** | `${{ inputs.cli_version }}` | — |
+
+            ---
+
+            ## How to Patch
+
+            1. Download the **nodpi single APK** for Messenger `${{ inputs.messenger_version }}` from [APKMirror → Messenger](https://www.apkmirror.com/apk/facebook-2/messenger/)
+            2. Place the APK alongside `revanced_only.py` — no renaming needed, the script auto-detects the APKMirror filename
+            3. Run:
+               ```
+               python revanced_only.py
+               ```
+               Or to skip patch selection prompts:
+               ```
+               python revanced_only.py -y
+               ```
+
+            ---
+
+            ## Patches Applied
+
+            | Patch | Description |
+            |-------|-------------|
+            | Hide inbox ads | Removes ads from the inbox |
+            | Hide inbox subtabs | Hides subtabs in the inbox |
+            | Remove Meta AI | Removes Meta AI button |
+            | Hide Facebook button | Hides the Facebook shortcut button |
+            | Disable Pairip license check | Bypasses Pairip license verification |
+            | Disable Play Integrity | Bypasses Play Integrity API checks |
+            | Prevent screenshot detection | Disables screenshot detection flag |
+
+            ---
+
+            ## ReVanced Patches Changelog
+
+            ${{ steps.patches.outputs.changelog }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
